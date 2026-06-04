@@ -8,6 +8,9 @@ import {
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
 
+// Origin API (без /api/v1) — для статики: картинок товаров и т.п.
+export const API_ORIGIN = API_URL.replace(/\/api\/v1\/?$/, "");
+
 export interface ApiError extends Error {
   status: number;
 }

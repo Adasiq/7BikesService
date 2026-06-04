@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { Workbook, Worksheet, Cell } from "exceljs";
+import { Workbook, Cell } from "exceljs";
 
 export interface ParsedProduct {
   sku: string;
@@ -7,17 +7,21 @@ export interface ParsedProduct {
   price: number;
   stockQty: number;
   currency: string;
+  category: string | null;
+  subcategory: string | null;
   attrs: Record<string, unknown>;
+}
+
+export interface ParsedImage {
+  sku: string;
+  buffer: Buffer;
+  ext: string;
 }
 
 export interface ParseResult {
   records: ParsedProduct[];
-  stats: {
-    scanned: number;
-    parsed: number;
-    skipped: number;
-    deduped: number;
-  };
+  images: ParsedImage[];
+  stats: { scanned: number; parsed: number; skipped: number; deduped: number };
 }
 
 // Поля, которые маппятся в колонки Product напрямую; остальные идут в attrs.
@@ -39,48 +43,62 @@ export class ExcelParserService {
     const ws = template.sheetName
       ? wb.getWorksheet(template.sheetName) ?? wb.worksheets[0]
       : wb.worksheets[0];
-    if (!ws) {
-      throw new Error("Лист с данными не найден");
-    }
+    if (!ws) throw new Error("Лист с данными не найден");
 
-    // Разделяем маппинг: числовые значения — индексы колонок, строковые — мета.
+    // Разбор маппинга: "_key" — управляющие настройки, число — колонка поля,
+    // строка — мета (currency).
     const cols: Record<string, number> = {};
     const meta: Record<string, string> = {};
+    const control: Record<string, number> = {};
     for (const [key, val] of Object.entries(template.columnMapping)) {
-      if (typeof val === "number") cols[key] = val;
+      if (key.startsWith("_")) {
+        if (typeof val === "number") control[key.slice(1)] = val;
+      } else if (typeof val === "number") cols[key] = val;
       else if (typeof val === "string") meta[key] = val;
     }
     const currency = meta.currency ?? "RUB";
+    const categoryCol = control.categoryCol ?? 0;
+    const subcategoryCol = control.subcategoryCol ?? 0;
 
     const bySku = new Map<string, ParsedProduct>();
+    const rowToSku = new Map<number, string>();
     let scanned = 0;
     let skipped = 0;
     let deduped = 0;
+    let category: string | null = null;
+    let subcategory: string | null = null;
 
     for (let r = template.headerRow + 1; r <= ws.rowCount; r++) {
       scanned++;
       const row = ws.getRow(r);
-      const read = (field: string) =>
-        cols[field] ? this.cellValue(row.getCell(cols[field])) : null;
+      const read = (col: number) =>
+        col ? this.cellValue(row.getCell(col)) : null;
 
-      const skuRaw = read("sku");
-      const price = this.toNumber(read("price"));
-      // Продукт = есть артикул и числовая цена. Иначе это категория/мусор.
+      const skuRaw = cols.sku ? read(cols.sku) : null;
+      const price = this.toNumber(cols.price ? read(cols.price) : null);
+
+      // Не товар => кандидат в заголовок категории/подкатегории.
       if (skuRaw === null || skuRaw === "" || price === null) {
+        const catVal = categoryCol ? read(categoryCol) : null;
+        const subVal = subcategoryCol ? read(subcategoryCol) : null;
+        if (catVal) {
+          category = String(catVal);
+          subcategory = null;
+        } else if (subVal) {
+          subcategory = String(subVal);
+        }
         skipped++;
         continue;
       }
 
       const sku = String(skuRaw).trim();
-      const name = String(read("name") ?? "").trim() || sku;
-
-      const stockRaw = read("stock");
-      const { stockQty, stockText } = this.parseStock(stockRaw);
+      const name = String(read(cols.name) ?? "").trim() || sku;
+      const { stockQty, stockText } = this.parseStock(read(cols.stock));
 
       const attrs: Record<string, unknown> = {};
-      for (const field of Object.keys(cols)) {
+      for (const [field, col] of Object.entries(cols)) {
         if (CORE_FIELDS.has(field)) continue;
-        const v = read(field);
+        const v = read(col);
         if (v !== null && v !== "") attrs[field] = v;
       }
       if (stockText) attrs.stockText = stockText;
@@ -91,18 +109,50 @@ export class ExcelParserService {
         price,
         stockQty,
         currency,
+        category,
+        subcategory,
         attrs,
       };
-
       if (bySku.has(sku)) deduped++;
-      bySku.set(sku, record); // последняя строка побеждает
+      bySku.set(sku, record);
+      rowToSku.set(r, sku);
     }
 
+    const images = this.extractImages(wb, ws, rowToSku);
     const records = [...bySku.values()];
     return {
       records,
+      images,
       stats: { scanned, parsed: records.length, skipped, deduped },
     };
+  }
+
+  // Сопоставляет встроенные картинки со строками товаров (по якорю), первая на SKU.
+  private extractImages(
+    wb: Workbook,
+    ws: unknown,
+    rowToSku: Map<number, string>,
+  ): ParsedImage[] {
+    const media = (wb as unknown as { media?: { type: string; extension?: string; buffer?: Buffer }[] }).media ?? [];
+    let anchored: { imageId: number; range?: { tl?: { nativeRow?: number } } }[] = [];
+    try {
+      anchored = (ws as { getImages?: () => typeof anchored }).getImages?.() ?? [];
+    } catch {
+      return [];
+    }
+
+    const images: ParsedImage[] = [];
+    const seen = new Set<string>();
+    for (const im of anchored) {
+      const row1 = (im.range?.tl?.nativeRow ?? -1) + 1;
+      const sku = rowToSku.get(row1);
+      if (!sku || seen.has(sku)) continue;
+      const m = media[im.imageId];
+      if (!m || m.type !== "image" || !m.buffer) continue;
+      seen.add(sku);
+      images.push({ sku, buffer: m.buffer, ext: m.extension || "png" });
+    }
+    return images;
   }
 
   private cellValue(cell: Cell): string | number | null {
@@ -127,14 +177,12 @@ export class ExcelParserService {
     return isNaN(n) ? null : n;
   }
 
-  // "Остаток" бывает числом (0..10) или текстом ">10". Сохраняем оба представления.
   private parseStock(raw: unknown): { stockQty: number; stockText: string | null } {
     if (raw === null || raw === "") return { stockQty: 0, stockText: null };
     if (typeof raw === "number") return { stockQty: Math.trunc(raw), stockText: null };
     const s = String(raw).trim();
     const n = this.toNumber(s);
     if (n !== null && !/[<>]/.test(s)) return { stockQty: Math.trunc(n), stockText: null };
-    // ">10" -> нижняя граница 11 + сырой текст для отображения
     if (/^>\s*\d+/.test(s)) {
       const base = this.toNumber(s) ?? 0;
       return { stockQty: Math.trunc(base) + 1, stockText: s };

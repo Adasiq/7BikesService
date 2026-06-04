@@ -5,9 +5,9 @@ import { PrismaService } from "../prisma/prisma.service";
 interface ListParams {
   search?: string;
   supplierId?: string;
+  category?: string;
   page: number;
   limit: number;
-  // принудительный скоуп поставщика (для ролей поставщика)
   forceSupplierId?: string | null;
 }
 
@@ -15,12 +15,21 @@ interface ListParams {
 export class CatalogService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(params: ListParams) {
-    const { search, page, limit } = params;
-    const supplierId = params.forceSupplierId ?? params.supplierId;
-
+  private scopeWhere(
+    forceSupplierId?: string | null,
+    supplierId?: string,
+  ): Prisma.ProductWhereInput {
     const where: Prisma.ProductWhereInput = { isActive: true };
-    if (supplierId) where.supplierId = supplierId;
+    const sid = forceSupplierId ?? supplierId;
+    if (sid) where.supplierId = sid;
+    return where;
+  }
+
+  async list(params: ListParams) {
+    const { search, category, page, limit } = params;
+    const where = this.scopeWhere(params.forceSupplierId, params.supplierId);
+
+    if (category) where.category = category;
     if (search && search.trim()) {
       const q = search.trim();
       where.OR = [
@@ -40,6 +49,20 @@ export class CatalogService {
     ]);
 
     return { data, total, page, limit };
+  }
+
+  // Список категорий с количеством товаров (для навигации каталога).
+  async categories(forceSupplierId?: string | null, supplierId?: string) {
+    const where = this.scopeWhere(forceSupplierId, supplierId);
+    const groups = await this.prisma.product.groupBy({
+      by: ["category"],
+      where,
+      _count: { _all: true },
+      orderBy: { category: "asc" },
+    });
+    return groups
+      .filter((g) => g.category)
+      .map((g) => ({ category: g.category as string, count: g._count._all }));
   }
 
   async getOne(id: string, forceSupplierId?: string | null) {

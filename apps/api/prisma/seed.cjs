@@ -19,6 +19,9 @@ const INVELUM_MAPPING = {
   country: 14,
   barcode: 15,
   currency: "BYN",
+  // управляющие ключи (с "_"): колонки заголовков категорий
+  _categoryCol: 3,
+  _subcategoryCol: 4,
 };
 
 async function main() {
@@ -79,7 +82,12 @@ async function main() {
     });
     console.log(`Import template created: ${t.name}`);
   } else {
-    console.log(`Import template exists: ${existingTemplate.name}`);
+    // Обновляем маппинг (могли добавиться новые ключи, напр. категории).
+    await prisma.importTemplate.update({
+      where: { id: existingTemplate.id },
+      data: { columnMapping: INVELUM_MAPPING },
+    });
+    console.log(`Import template updated: ${existingTemplate.name}`);
   }
 }
 

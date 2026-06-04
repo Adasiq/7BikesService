@@ -2,6 +2,8 @@ import { join } from "path";
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
+import { ServeStaticModule } from "@nestjs/serve-static";
+import { UPLOAD_DIR, UPLOAD_URL_PREFIX } from "./uploads";
 import { PrismaModule } from "./prisma/prisma.module";
 import { AuthModule } from "./auth/auth.module";
 import { TenantsModule } from "./tenants/tenants.module";
@@ -18,6 +20,10 @@ import { HealthController } from "./health.controller";
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [join(__dirname, "..", ".env"), ".env"],
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: UPLOAD_DIR,
+      serveRoot: UPLOAD_URL_PREFIX,
     }),
     PrismaModule,
     AuthModule,

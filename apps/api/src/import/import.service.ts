@@ -3,9 +3,16 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
+import { promises as fs } from "fs";
+import { join } from "path";
 import { Prisma, ImportBatchStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
-import { ExcelParserService, ParsedProduct } from "./excel-parser.service";
+import {
+  ExcelParserService,
+  ParsedProduct,
+  ParsedImage,
+} from "./excel-parser.service";
+import { UPLOAD_DIR, UPLOAD_URL_PREFIX } from "../uploads";
 
 @Injectable()
 export class ImportService {
@@ -37,7 +44,6 @@ export class ImportService {
     return batch;
   }
 
-  // Импорт прайса поставщика из загруженного файла.
   async importForSupplier(
     supplierId: string,
     file: { originalname: string; buffer: Buffer } | undefined,
@@ -66,13 +72,19 @@ export class ImportService {
     });
 
     try {
-      const { records, stats } = await this.parser.parse(file.buffer, {
+      const { records, images, stats } = await this.parser.parse(file.buffer, {
         sheetName: template.sheetName,
         headerRow: template.headerRow,
         columnMapping: template.columnMapping as Record<string, unknown>,
       });
 
-      const deactivated = await this.persist(supplierId, batch.id, records);
+      const imageUrls = await this.saveImages(supplierId, images);
+      const deactivated = await this.persist(
+        supplierId,
+        batch.id,
+        records,
+        imageUrls,
+      );
 
       return this.prisma.importBatch.update({
         where: { id: batch.id },
@@ -84,6 +96,7 @@ export class ImportService {
             scanned: stats.scanned,
             deduped: stats.deduped,
             deactivated,
+            images: imageUrls.size,
           } as Prisma.InputJsonValue,
         },
       });
@@ -101,11 +114,41 @@ export class ImportService {
     }
   }
 
+  // Сохраняет картинки на диск, возвращает map sku -> публичный URL.
+  private async saveImages(
+    supplierId: string,
+    images: ParsedImage[],
+  ): Promise<Map<string, string>> {
+    const urls = new Map<string, string>();
+    if (!images.length) return urls;
+
+    const dir = join(UPLOAD_DIR, "products", supplierId);
+    await fs.mkdir(dir, { recursive: true });
+
+    const CHUNK = 50;
+    for (let i = 0; i < images.length; i += CHUNK) {
+      const slice = images.slice(i, i + CHUNK);
+      await Promise.all(
+        slice.map(async (img) => {
+          const safeSku = img.sku.replace(/[^a-zA-Z0-9_-]/g, "_");
+          const fileName = `${safeSku}.${img.ext}`;
+          await fs.writeFile(join(dir, fileName), img.buffer);
+          urls.set(
+            img.sku,
+            `${UPLOAD_URL_PREFIX}/products/${supplierId}/${fileName}`,
+          );
+        }),
+      );
+    }
+    return urls;
+  }
+
   // Полный снимок каталога: create новых, update существующих, деактивация исчезнувших.
   private async persist(
     supplierId: string,
     batchId: string,
     records: ParsedProduct[],
+    imageUrls: Map<string, string>,
   ): Promise<number> {
     const existing = await this.prisma.product.findMany({
       where: { supplierId },
@@ -113,51 +156,43 @@ export class ImportService {
     });
     const existingSkus = new Set(existing.map((p) => p.sku));
 
+    const data = (r: ParsedProduct) => ({
+      name: r.name,
+      price: new Prisma.Decimal(r.price),
+      currency: r.currency,
+      stockQty: r.stockQty,
+      category: r.category,
+      subcategory: r.subcategory,
+      imageUrl: imageUrls.get(r.sku) ?? null,
+      attrs: r.attrs as Prisma.InputJsonValue,
+      importBatchId: batchId,
+      isActive: true,
+    });
+
     const toCreate = records.filter((r) => !existingSkus.has(r.sku));
     const toUpdate = records.filter((r) => existingSkus.has(r.sku));
 
-    // Вставка пачками.
     const CHUNK = 1000;
     for (let i = 0; i < toCreate.length; i += CHUNK) {
-      const slice = toCreate.slice(i, i + CHUNK);
       await this.prisma.product.createMany({
-        data: slice.map((r) => ({
-          supplierId,
-          importBatchId: batchId,
-          sku: r.sku,
-          name: r.name,
-          price: new Prisma.Decimal(r.price),
-          currency: r.currency,
-          stockQty: r.stockQty,
-          attrs: r.attrs as Prisma.InputJsonValue,
-          isActive: true,
-        })),
+        data: toCreate
+          .slice(i, i + CHUNK)
+          .map((r) => ({ supplierId, sku: r.sku, ...data(r) })),
       });
     }
 
-    // Обновление существующих (ограниченная конкуррентность).
     const CONC = 25;
     for (let i = 0; i < toUpdate.length; i += CONC) {
-      const slice = toUpdate.slice(i, i + CONC);
       await Promise.all(
-        slice.map((r) =>
+        toUpdate.slice(i, i + CONC).map((r) =>
           this.prisma.product.update({
             where: { supplierId_sku: { supplierId, sku: r.sku } },
-            data: {
-              importBatchId: batchId,
-              name: r.name,
-              price: new Prisma.Decimal(r.price),
-              currency: r.currency,
-              stockQty: r.stockQty,
-              attrs: r.attrs as Prisma.InputJsonValue,
-              isActive: true,
-            },
+            data: data(r),
           }),
         ),
       );
     }
 
-    // Деактивируем товары, которых нет в новом прайсе.
     const seenSkus = records.map((r) => r.sku);
     const { count } = await this.prisma.product.updateMany({
       where: { supplierId, sku: { notIn: seenSkus }, isActive: true },
