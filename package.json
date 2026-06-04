@@ -1,0 +1,21 @@
+{
+  "name": "7bs",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.5.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:shared": "pnpm --filter @7bs/shared build",
+    "dev:api": "pnpm --filter @7bs/api dev",
+    "dev:web": "pnpm --filter @7bs/web dev",
+    "build": "pnpm --filter @7bs/shared build && pnpm -r --filter \"./apps/*\" build",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "@types/node": "^22.7.4"
+  }
+}
