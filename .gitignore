@@ -52,3 +52,6 @@ tmp/
 
 # Uploaded price files (local dev)
 uploads/
+
+# Supplier price files (not committed)
+samples/
