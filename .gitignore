@@ -10,6 +10,9 @@ build/
 out/
 *.tsbuildinfo
 
+# Prisma generated client (regenerated via prisma generate)
+**/generated/prisma
+
 # Env / secrets
 .env
 .env.local
@@ -41,6 +44,9 @@ coverage/
 .turbo/
 .cache/
 tmp/
+
+# Local Claude Code settings (personal, not shared)
+.claude/settings.local.json
 
 # Uploaded price files (local dev)
 uploads/
