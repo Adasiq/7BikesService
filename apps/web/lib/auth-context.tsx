@@ -9,9 +9,7 @@ import {
 } from "react";
 import type { AuthUser, LoginResponse } from "@7bs/shared";
 import { apiFetch } from "./api";
-
-const ACCESS_KEY = "7bs_access_token";
-const REFRESH_KEY = "7bs_refresh_token";
+import { getAccessToken, setTokens, clearTokens } from "./tokens";
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -28,20 +26,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // При загрузке: если есть токен — валидируем через /auth/me.
   useEffect(() => {
-    const token =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem(ACCESS_KEY)
-        : null;
+    const token = getAccessToken();
     if (!token) {
       setLoading(false);
       return;
     }
     apiFetch<AuthUser>("/auth/me", { token })
       .then(setUser)
-      .catch(() => {
-        window.localStorage.removeItem(ACCESS_KEY);
-        window.localStorage.removeItem(REFRESH_KEY);
-      })
+      .catch(() => clearTokens())
       .finally(() => setLoading(false));
   }, []);
 
@@ -50,14 +42,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       method: "POST",
       body: { email, password },
     });
-    window.localStorage.setItem(ACCESS_KEY, res.accessToken);
-    window.localStorage.setItem(REFRESH_KEY, res.refreshToken);
+    setTokens(res.accessToken, res.refreshToken);
     setUser(res.user);
   }, []);
 
   const logout = useCallback(() => {
-    window.localStorage.removeItem(ACCESS_KEY);
-    window.localStorage.removeItem(REFRESH_KEY);
+    clearTokens();
     setUser(null);
   }, []);
 
@@ -74,9 +64,4 @@ export function useAuth(): AuthContextValue {
     throw new Error("useAuth must be used within AuthProvider");
   }
   return ctx;
-}
-
-export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(ACCESS_KEY);
 }
