@@ -20,17 +20,27 @@ const SUPPLIER_ROLES: UserRole[] = [
 export class CatalogController {
   constructor(private readonly catalogService: CatalogService) {}
 
+  @Get("categories")
+  categories(
+    @CurrentUser() user: RequestUser,
+    @Query("supplierId") supplierId?: string,
+  ) {
+    return this.catalogService.categories(this.supplierScope(user), supplierId);
+  }
+
   @Get("products")
   list(
     @CurrentUser() user: RequestUser,
     @Query("search") search?: string,
     @Query("supplierId") supplierId?: string,
+    @Query("category") category?: string,
     @Query("page") page = "1",
     @Query("limit") limit = "20",
   ) {
     return this.catalogService.list({
       search,
       supplierId,
+      category,
       page: Math.max(1, parseInt(page, 10) || 1),
       limit: Math.min(100, Math.max(1, parseInt(limit, 10) || 20)),
       forceSupplierId: this.supplierScope(user),
