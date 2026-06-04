@@ -1,0 +1,301 @@
+// 7BS — ЧЕРНОВИК схемы данных (спецификация, не финальный код).
+// Назначение: зафиксировать модель данных перед стартом разработки.
+// Замечания по реализации помечены NOTE. Сущности вне MVP помечены DEFERRED.
+//
+// Конвенции:
+//  - id: cuid()
+//  - тенант-привязка: workshopId | supplierId (оба ссылаются на Tenant)
+//  - деньги: Decimal(12,2); snapshot-поля фиксируют значение на момент заказа
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum TenantType {
+  WORKSHOP
+  SUPPLIER
+}
+
+enum UserRole {
+  SUPER_ADMIN // без тенанта, системный
+  SUPPLIER_ADMIN
+  SUPPLIER_STAFF
+  WORKSHOP_ADMIN
+  MECHANIC
+}
+
+enum OrderStatus {
+  NEW
+  ACCEPTED
+  ASSEMBLED
+  SHIPPED
+  CANCELLED
+}
+
+enum WorkOrderStatus {
+  NEW
+  IN_PROGRESS
+  WAITING_PARTS
+  DONE
+  CLOSED
+}
+
+enum ImportBatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Identity / тенанты
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id        String     @id @default(cuid())
+  type      TenantType
+  name      String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  users User[]
+
+  // как supplier:
+  importTemplates ImportTemplate[]
+  importBatches   ImportBatch[]
+  products        Product[]
+  ordersReceived  Order[]          @relation("SupplierOrders")
+
+  // как workshop:
+  clients      Client[]
+  workOrders   WorkOrder[]
+  ordersPlaced Order[]     @relation("WorkshopOrders")
+  stockItems   StockItem[]
+
+  @@index([type])
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String? // null только у SUPER_ADMIN
+  role         UserRole
+  email        String   @unique
+  passwordHash String
+  name         String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant            Tenant?     @relation(fields: [tenantId], references: [id])
+  assignedWorkOrders WorkOrder[] @relation("MechanicWorkOrders")
+  createdOrders     Order[]     @relation("OrderCreatedBy")
+
+  @@index([tenantId])
+  @@index([role])
+}
+
+// ---------------------------------------------------------------------------
+// Import (прайсы поставщиков)
+// ---------------------------------------------------------------------------
+
+// MVP: один ImportTemplate на генерального поставщика с отработанным форматом.
+// Гибкий редактор маппинга — следующая итерация.
+model ImportTemplate {
+  id           String   @id @default(cuid())
+  supplierId   String
+  name         String
+  sheetName    String? // имя листа Excel, если не первый
+  headerRow    Int      @default(1)
+  // columnMapping: { "поле_системы": "имя/индекс колонки" }
+  // напр. { "sku": "Артикул", "name": "Наименование", "price": "Цена", "stockQty": "Остаток" }
+  columnMapping Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  supplier Tenant        @relation(fields: [supplierId], references: [id])
+  batches  ImportBatch[]
+
+  @@index([supplierId])
+}
+
+model ImportBatch {
+  id         String            @id @default(cuid())
+  supplierId String
+  templateId String
+  fileRef    String // ключ в объектном хранилище (R2)
+  status     ImportBatchStatus @default(PENDING)
+  rowsOk     Int               @default(0)
+  rowsErr    Int               @default(0)
+  errorLog   Json? // [{ row, message }]
+  importedAt DateTime          @default(now())
+
+  supplier Tenant         @relation(fields: [supplierId], references: [id])
+  template ImportTemplate @relation(fields: [templateId], references: [id])
+  products Product[]
+
+  @@index([supplierId])
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  supplierId    String
+  importBatchId String? // партия, последней обновившая запись
+  sku           String
+  name          String
+  price         Decimal  @db.Decimal(12, 2)
+  currency      String   @default("RUB")
+  stockQty      Int      @default(0)
+  attrs         Json? // произвольные атрибуты из прайса
+  isActive      Boolean  @default(true)
+  updatedAt     DateTime @updatedAt
+
+  supplier    Tenant       @relation(fields: [supplierId], references: [id])
+  importBatch ImportBatch? @relation(fields: [importBatchId], references: [id])
+  orderItems  OrderItem[]
+
+  // артикул уникален в пределах поставщика
+  @@unique([supplierId, sku])
+  @@index([supplierId])
+  @@index([name]) // NOTE: для поиска позже заменить на full-text / pg_trgm
+}
+
+// ---------------------------------------------------------------------------
+// CRM
+// ---------------------------------------------------------------------------
+
+model Client {
+  id         String   @id @default(cuid())
+  workshopId String
+  name       String
+  phone      String?
+  email      String?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  workshop   Tenant      @relation(fields: [workshopId], references: [id])
+  bikes      Bike[]
+  workOrders WorkOrder[]
+
+  @@index([workshopId])
+}
+
+model Bike {
+  id        String   @id @default(cuid())
+  clientId  String
+  brand     String?
+  model     String?
+  notes     String?
+  createdAt DateTime @default(now())
+
+  client     Client      @relation(fields: [clientId], references: [id])
+  workOrders WorkOrder[]
+
+  @@index([clientId])
+}
+
+model WorkOrder {
+  id          String          @id @default(cuid())
+  workshopId  String
+  clientId    String
+  bikeId      String?
+  mechanicId  String?
+  status      WorkOrderStatus @default(NEW)
+  title       String?
+  description String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  workshop Tenant          @relation(fields: [workshopId], references: [id])
+  client   Client          @relation(fields: [clientId], references: [id])
+  bike     Bike?           @relation(fields: [bikeId], references: [id])
+  mechanic User?           @relation("MechanicWorkOrders", fields: [mechanicId], references: [id])
+  lines    WorkOrderLine[]
+  orderItems OrderItem[] // позиции заказов, привязанные к этому наряду
+
+  @@index([workshopId])
+  @@index([clientId])
+  @@index([status])
+}
+
+model WorkOrderLine {
+  id          String   @id @default(cuid())
+  workOrderId String
+  description String // услуга или деталь (текстом)
+  qty         Int      @default(1)
+  price       Decimal? @db.Decimal(12, 2)
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  @@index([workOrderId])
+}
+
+// ---------------------------------------------------------------------------
+// Orders (мастерская -> поставщик)
+// ---------------------------------------------------------------------------
+
+// Инвариант: один Order = один поставщик. Корзина мастера, охватывающая
+// несколько поставщиков, на оформлении бьётся на несколько Order.
+model Order {
+  id          String      @id @default(cuid())
+  workshopId  String
+  supplierId  String
+  createdById String
+  status      OrderStatus @default(NEW)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  workshop  Tenant      @relation("WorkshopOrders", fields: [workshopId], references: [id])
+  supplier  Tenant      @relation("SupplierOrders", fields: [supplierId], references: [id])
+  createdBy User        @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  items     OrderItem[]
+
+  @@index([workshopId])
+  @@index([supplierId])
+  @@index([status])
+}
+
+model OrderItem {
+  id            String  @id @default(cuid())
+  orderId       String
+  productId     String
+  workOrderId   String? // привязка к заказ-наряду (опционально)
+  qty           Int
+  // snapshot на момент оформления — не зависят от последующих изменений Product
+  priceSnapshot Decimal @db.Decimal(12, 2)
+  nameSnapshot  String
+  skuSnapshot   String
+
+  order     Order      @relation(fields: [orderId], references: [id])
+  product   Product    @relation(fields: [productId], references: [id])
+  workOrder WorkOrder? @relation(fields: [workOrderId], references: [id])
+
+  @@index([orderId])
+  @@index([workOrderId])
+}
+
+// ---------------------------------------------------------------------------
+// Inventory (DEFERRED — вне MVP; в MVP хватает Product.stockQty у поставщика)
+// ---------------------------------------------------------------------------
+
+model StockItem {
+  id          String   @id @default(cuid())
+  workshopId  String
+  productRef  String? // ссылка/артикул; модель уточнить при возврате склада в скоуп
+  name        String
+  qty         Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  workshop Tenant @relation(fields: [workshopId], references: [id])
+
+  @@index([workshopId])
+}
