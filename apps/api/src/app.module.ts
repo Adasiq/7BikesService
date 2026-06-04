@@ -1,3 +1,4 @@
+import { join } from "path";
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
@@ -10,7 +11,12 @@ import { HealthController } from "./health.controller";
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    // envFilePath не зависит от cwd: .env лежит рядом с собранным кодом
+    // (apps/api/.env), куда бы ни запускали (root или apps/api).
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [join(__dirname, "..", ".env"), ".env"],
+    }),
     PrismaModule,
     AuthModule,
     TenantsModule,

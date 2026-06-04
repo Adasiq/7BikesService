@@ -47,6 +47,8 @@ tmp/
 
 # Local Claude Code settings (personal, not shared)
 .claude/settings.local.json
+# Preview launch config (machine-specific absolute paths)
+.claude/launch.json
 
 # Uploaded price files (local dev)
 uploads/
