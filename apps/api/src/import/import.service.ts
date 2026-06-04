@@ -1,0 +1,168 @@
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from "@nestjs/common";
+import { Prisma, ImportBatchStatus } from "@prisma/client";
+import { PrismaService } from "../prisma/prisma.service";
+import { ExcelParserService, ParsedProduct } from "./excel-parser.service";
+
+@Injectable()
+export class ImportService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly parser: ExcelParserService,
+  ) {}
+
+  listTemplates(supplierId: string) {
+    return this.prisma.importTemplate.findMany({
+      where: { supplierId },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  listBatches(supplierId: string) {
+    return this.prisma.importBatch.findMany({
+      where: { supplierId },
+      orderBy: { importedAt: "desc" },
+      take: 50,
+    });
+  }
+
+  async getBatch(supplierId: string, id: string) {
+    const batch = await this.prisma.importBatch.findFirst({
+      where: { id, supplierId },
+    });
+    if (!batch) throw new NotFoundException("Batch not found");
+    return batch;
+  }
+
+  // Импорт прайса поставщика из загруженного файла.
+  async importForSupplier(
+    supplierId: string,
+    file: { originalname: string; buffer: Buffer } | undefined,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException("Файл не получен");
+    }
+
+    const template = await this.prisma.importTemplate.findFirst({
+      where: { supplierId },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!template) {
+      throw new BadRequestException(
+        "Для поставщика не настроен шаблон импорта (ImportTemplate)",
+      );
+    }
+
+    const batch = await this.prisma.importBatch.create({
+      data: {
+        supplierId,
+        templateId: template.id,
+        fileRef: `upload:${file.originalname}`,
+        status: ImportBatchStatus.PROCESSING,
+      },
+    });
+
+    try {
+      const { records, stats } = await this.parser.parse(file.buffer, {
+        sheetName: template.sheetName,
+        headerRow: template.headerRow,
+        columnMapping: template.columnMapping as Record<string, unknown>,
+      });
+
+      const deactivated = await this.persist(supplierId, batch.id, records);
+
+      return this.prisma.importBatch.update({
+        where: { id: batch.id },
+        data: {
+          status: ImportBatchStatus.COMPLETED,
+          rowsOk: stats.parsed,
+          rowsErr: stats.skipped,
+          errorLog: {
+            scanned: stats.scanned,
+            deduped: stats.deduped,
+            deactivated,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (e) {
+      await this.prisma.importBatch.update({
+        where: { id: batch.id },
+        data: {
+          status: ImportBatchStatus.FAILED,
+          errorLog: {
+            message: e instanceof Error ? e.message : String(e),
+          } as Prisma.InputJsonValue,
+        },
+      });
+      throw e;
+    }
+  }
+
+  // Полный снимок каталога: create новых, update существующих, деактивация исчезнувших.
+  private async persist(
+    supplierId: string,
+    batchId: string,
+    records: ParsedProduct[],
+  ): Promise<number> {
+    const existing = await this.prisma.product.findMany({
+      where: { supplierId },
+      select: { sku: true },
+    });
+    const existingSkus = new Set(existing.map((p) => p.sku));
+
+    const toCreate = records.filter((r) => !existingSkus.has(r.sku));
+    const toUpdate = records.filter((r) => existingSkus.has(r.sku));
+
+    // Вставка пачками.
+    const CHUNK = 1000;
+    for (let i = 0; i < toCreate.length; i += CHUNK) {
+      const slice = toCreate.slice(i, i + CHUNK);
+      await this.prisma.product.createMany({
+        data: slice.map((r) => ({
+          supplierId,
+          importBatchId: batchId,
+          sku: r.sku,
+          name: r.name,
+          price: new Prisma.Decimal(r.price),
+          currency: r.currency,
+          stockQty: r.stockQty,
+          attrs: r.attrs as Prisma.InputJsonValue,
+          isActive: true,
+        })),
+      });
+    }
+
+    // Обновление существующих (ограниченная конкуррентность).
+    const CONC = 25;
+    for (let i = 0; i < toUpdate.length; i += CONC) {
+      const slice = toUpdate.slice(i, i + CONC);
+      await Promise.all(
+        slice.map((r) =>
+          this.prisma.product.update({
+            where: { supplierId_sku: { supplierId, sku: r.sku } },
+            data: {
+              importBatchId: batchId,
+              name: r.name,
+              price: new Prisma.Decimal(r.price),
+              currency: r.currency,
+              stockQty: r.stockQty,
+              attrs: r.attrs as Prisma.InputJsonValue,
+              isActive: true,
+            },
+          }),
+        ),
+      );
+    }
+
+    // Деактивируем товары, которых нет в новом прайсе.
+    const seenSkus = records.map((r) => r.sku);
+    const { count } = await this.prisma.product.updateMany({
+      where: { supplierId, sku: { notIn: seenSkus }, isActive: true },
+      data: { isActive: false },
+    });
+    return count;
+  }
+}
