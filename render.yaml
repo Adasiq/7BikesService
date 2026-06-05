@@ -1,0 +1,33 @@
+# Render Blueprint для бэкенда (NestJS API).
+# Render → New → Blueprint → подключить репозиторий → применит этот файл.
+# Фронтенд (Next.js) разворачивается отдельно на Vercel — см. DEPLOY.md.
+services:
+  - type: web
+    name: 7bs-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: >-
+      pnpm install &&
+      pnpm build:shared &&
+      pnpm --filter @7bs/api exec prisma migrate deploy &&
+      pnpm --filter @7bs/api exec prisma db seed &&
+      pnpm --filter @7bs/api build
+    startCommand: node apps/api/dist/main.js
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # DATABASE_URL — строка подключения Neon. Введи в панели Render (Secret).
+      - key: DATABASE_URL
+        sync: false
+      # Секреты JWT — Render сгенерирует случайные.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: SUPERADMIN_EMAIL
+        value: admin@7bs.local
+      # Пароль супер-админа — задай в панели Render (Secret).
+      - key: SUPERADMIN_PASSWORD
+        sync: false

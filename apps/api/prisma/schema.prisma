@@ -152,14 +152,24 @@ model Product {
   isActive      Boolean  @default(true)
   updatedAt     DateTime @updatedAt
 
-  supplier    Tenant       @relation(fields: [supplierId], references: [id])
-  importBatch ImportBatch? @relation(fields: [importBatchId], references: [id])
+  supplier    Tenant        @relation(fields: [supplierId], references: [id])
+  importBatch ImportBatch?  @relation(fields: [importBatchId], references: [id])
   orderItems  OrderItem[]
+  image       ProductImage?
 
   @@unique([supplierId, sku])
   @@index([supplierId])
   @@index([name])
   @@index([supplierId, category])
+}
+
+// Картинка товара хранится в БД (Bytea) — приложение остаётся stateless,
+// работает на любом хостинге без постоянного диска.
+model ProductImage {
+  productId String  @id
+  data      Bytes
+  mime      String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 // ---------------------------------------------------------------------------
