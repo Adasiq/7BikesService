@@ -4,6 +4,8 @@ SaaS CRM для веломастерских с интеграцией пост�
 
 Проектная документация: [ARCHITECTURE.md](ARCHITECTURE.md) · [API.md](API.md) · [prisma/schema.draft.prisma](prisma/schema.draft.prisma).
 
+Развёртывание на хостинге: [DEPLOY.md](DEPLOY.md) (Beget + Neon).
+
 ## Стек
 
 Монорепо на **pnpm workspaces**:
