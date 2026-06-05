@@ -3,8 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from "@nestjs/common";
-import { promises as fs } from "fs";
-import { join } from "path";
+import { randomUUID } from "crypto";
 import { Prisma, ImportBatchStatus } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -12,7 +11,20 @@ import {
   ParsedProduct,
   ParsedImage,
 } from "./excel-parser.service";
-import { UPLOAD_DIR, UPLOAD_URL_PREFIX } from "../uploads";
+
+function extToMime(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    default:
+      return "image/png";
+  }
+}
 
 @Injectable()
 export class ImportService {
@@ -78,12 +90,11 @@ export class ImportService {
         columnMapping: template.columnMapping as Record<string, unknown>,
       });
 
-      const imageUrls = await this.saveImages(supplierId, images);
-      const deactivated = await this.persist(
+      const { deactivated, imagesSaved } = await this.persist(
         supplierId,
         batch.id,
         records,
-        imageUrls,
+        images,
       );
 
       return this.prisma.importBatch.update({
@@ -96,7 +107,7 @@ export class ImportService {
             scanned: stats.scanned,
             deduped: stats.deduped,
             deactivated,
-            images: imageUrls.size,
+            images: imagesSaved,
           } as Prisma.InputJsonValue,
         },
       });
@@ -114,83 +125,94 @@ export class ImportService {
     }
   }
 
-  // Сохраняет картинки на диск, возвращает map sku -> публичный URL.
-  private async saveImages(
-    supplierId: string,
-    images: ParsedImage[],
-  ): Promise<Map<string, string>> {
-    const urls = new Map<string, string>();
-    if (!images.length) return urls;
-
-    const dir = join(UPLOAD_DIR, "products", supplierId);
-    await fs.mkdir(dir, { recursive: true });
-
-    const CHUNK = 50;
-    for (let i = 0; i < images.length; i += CHUNK) {
-      const slice = images.slice(i, i + CHUNK);
-      await Promise.all(
-        slice.map(async (img) => {
-          const safeSku = img.sku.replace(/[^a-zA-Z0-9_-]/g, "_");
-          const fileName = `${safeSku}.${img.ext}`;
-          await fs.writeFile(join(dir, fileName), img.buffer);
-          urls.set(
-            img.sku,
-            `${UPLOAD_URL_PREFIX}/products/${supplierId}/${fileName}`,
-          );
-        }),
-      );
-    }
-    return urls;
-  }
-
-  // Полный снимок каталога: create новых, update существующих, деактивация исчезнувших.
+  // Полный снимок каталога: create/update товаров + картинки в БД.
   private async persist(
     supplierId: string,
     batchId: string,
     records: ParsedProduct[],
-    imageUrls: Map<string, string>,
-  ): Promise<number> {
+    images: ParsedImage[],
+  ): Promise<{ deactivated: number; imagesSaved: number }> {
     const existing = await this.prisma.product.findMany({
       where: { supplierId },
-      select: { sku: true },
+      select: { id: true, sku: true },
     });
-    const existingSkus = new Set(existing.map((p) => p.sku));
+    const skuToId = new Map(existing.map((p) => [p.sku, p.id]));
+    const existingSkus = new Set(skuToId.keys());
+    const hasImage = new Set(images.map((i) => i.sku));
 
-    const data = (r: ParsedProduct) => ({
+    // Назначаем id новым товарам заранее — чтобы построить ссылку на картинку.
+    const toCreate: { id: string; r: ParsedProduct }[] = [];
+    const toUpdate: { id: string; r: ParsedProduct }[] = [];
+    for (const r of records) {
+      const existingId = skuToId.get(r.sku);
+      if (existingId) {
+        toUpdate.push({ id: existingId, r });
+      } else {
+        const id = randomUUID();
+        skuToId.set(r.sku, id);
+        toCreate.push({ id, r });
+      }
+    }
+
+    const data = (id: string, r: ParsedProduct) => ({
       name: r.name,
       price: new Prisma.Decimal(r.price),
       currency: r.currency,
       stockQty: r.stockQty,
       category: r.category,
       subcategory: r.subcategory,
-      imageUrl: imageUrls.get(r.sku) ?? null,
+      imageUrl: hasImage.has(r.sku)
+        ? `/api/v1/catalog/products/${id}/image`
+        : null,
       attrs: r.attrs as Prisma.InputJsonValue,
       importBatchId: batchId,
       isActive: true,
     });
-
-    const toCreate = records.filter((r) => !existingSkus.has(r.sku));
-    const toUpdate = records.filter((r) => existingSkus.has(r.sku));
 
     const CHUNK = 1000;
     for (let i = 0; i < toCreate.length; i += CHUNK) {
       await this.prisma.product.createMany({
         data: toCreate
           .slice(i, i + CHUNK)
-          .map((r) => ({ supplierId, sku: r.sku, ...data(r) })),
+          .map(({ id, r }) => ({ id, supplierId, sku: r.sku, ...data(id, r) })),
       });
     }
 
     const CONC = 25;
     for (let i = 0; i < toUpdate.length; i += CONC) {
       await Promise.all(
-        toUpdate.slice(i, i + CONC).map((r) =>
+        toUpdate.slice(i, i + CONC).map(({ id, r }) =>
           this.prisma.product.update({
             where: { supplierId_sku: { supplierId, sku: r.sku } },
-            data: data(r),
+            data: data(id, r),
           }),
         ),
       );
+    }
+
+    // Картинки: перезаписываем для затронутых товаров (delete + createMany).
+    const imageRows: Prisma.ProductImageCreateManyInput[] = [];
+    for (const im of images) {
+      const productId = skuToId.get(im.sku);
+      if (!productId) continue;
+      imageRows.push({
+        productId,
+        data: Uint8Array.from(im.buffer),
+        mime: extToMime(im.ext),
+      });
+    }
+
+    const ids = imageRows.map((x) => x.productId as string);
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      await this.prisma.productImage.deleteMany({
+        where: { productId: { in: ids.slice(i, i + CHUNK) } },
+      });
+    }
+    const IMG_CHUNK = 400;
+    for (let i = 0; i < imageRows.length; i += IMG_CHUNK) {
+      await this.prisma.productImage.createMany({
+        data: imageRows.slice(i, i + IMG_CHUNK),
+      });
     }
 
     const seenSkus = records.map((r) => r.sku);
@@ -198,6 +220,7 @@ export class ImportService {
       where: { supplierId, sku: { notIn: seenSkus }, isActive: true },
       data: { isActive: false },
     });
-    return count;
+
+    return { deactivated: count, imagesSaved: imageRows.length };
   }
 }

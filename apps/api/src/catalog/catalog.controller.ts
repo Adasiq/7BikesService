@@ -1,7 +1,9 @@
-import { Controller, Get, Param, Query } from "@nestjs/common";
+import { Controller, Get, Param, Query, Res } from "@nestjs/common";
+import { Response } from "express";
 import { UserRole } from "@prisma/client";
 import { CatalogService } from "./catalog.service";
 import { Roles } from "../auth/decorators/roles.decorator";
+import { Public } from "../auth/decorators/public.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { RequestUser } from "../auth/jwt.types";
 
@@ -50,6 +52,18 @@ export class CatalogController {
   @Get("products/:id")
   getOne(@CurrentUser() user: RequestUser, @Param("id") id: string) {
     return this.catalogService.getOne(id, this.supplierScope(user));
+  }
+
+  // Картинка товара. Публично (без токена) — иначе <img> не загрузит.
+  // @Roles() с пустым списком снимает ролевое ограничение контроллера.
+  @Public()
+  @Roles()
+  @Get("products/:id/image")
+  async image(@Param("id") id: string, @Res() res: Response) {
+    const img = await this.catalogService.getImage(id);
+    res.setHeader("Content-Type", img.mime);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.end(img.data);
   }
 
   // Поставщик видит только свой каталог; мастерская — все активные товары.

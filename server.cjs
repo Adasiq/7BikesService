@@ -38,14 +38,11 @@ async function bootstrap() {
   await webApp.prepare();
   const handle = webApp.getRequestHandler();
 
-  // 3. Маршрутизация на уровне Express: /api/* и /uploads/* отдаём Nest,
-  //    всё остальное — Next. Этот middleware ставим ПЕРВЫМ, чтобы не зависеть
-  //    от порядка регистрации маршрутов Nest.
+  // 3. Маршрутизация на уровне Express: /api/* отдаём Nest, остальное — Next.
+  //    Этот middleware ставим ПЕРВЫМ, чтобы не зависеть от порядка маршрутов Nest.
   const server = nestApp.getHttpAdapter().getInstance();
   server.use((req, res, nextFn) => {
-    if (req.url.startsWith("/api/") || req.url.startsWith("/uploads")) {
-      return nextFn();
-    }
+    if (req.url.startsWith("/api/")) return nextFn();
     return handle(req, res);
   });
 

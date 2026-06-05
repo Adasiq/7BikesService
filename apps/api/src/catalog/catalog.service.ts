@@ -66,6 +66,14 @@ export class CatalogService {
       .map((g) => ({ category: g.category as string, count: g._count._all }));
   }
 
+  async getImage(id: string) {
+    const img = await this.prisma.productImage.findUnique({
+      where: { productId: id },
+    });
+    if (!img) throw new NotFoundException("Image not found");
+    return img;
+  }
+
   async getOne(id: string, forceSupplierId?: string | null) {
     const product = await this.prisma.product.findUnique({ where: { id } });
     if (
