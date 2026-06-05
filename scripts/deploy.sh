@@ -22,8 +22,8 @@ pnpm --filter @7bs/api build
 echo "==> сборка веб (использует apps/web/.env.local: NEXT_PUBLIC_API_URL)"
 pnpm --filter @7bs/web build
 
-echo "==> перезапуск приложений (Passenger)"
-mkdir -p apps/api/tmp apps/web/tmp
-touch apps/api/tmp/restart.txt apps/web/tmp/restart.txt
+echo "==> перезапуск приложения (Passenger)"
+mkdir -p tmp
+touch tmp/restart.txt
 
-echo "==> Готово. Оба приложения перезапущены."
+echo "==> Готово. Приложение перезапущено."
