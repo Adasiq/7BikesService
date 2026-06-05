@@ -9,6 +9,7 @@ import { AuthModule } from "./auth/auth.module";
 import { TenantsModule } from "./tenants/tenants.module";
 import { ImportModule } from "./import/import.module";
 import { CatalogModule } from "./catalog/catalog.module";
+import { OrdersModule } from "./orders/orders.module";
 import { JwtAuthGuard } from "./auth/guards/jwt-auth.guard";
 import { RolesGuard } from "./auth/guards/roles.guard";
 import { HealthController } from "./health.controller";
@@ -30,6 +31,7 @@ import { HealthController } from "./health.controller";
     TenantsModule,
     ImportModule,
     CatalogModule,
+    OrdersModule,
   ],
   controllers: [HealthController],
   providers: [

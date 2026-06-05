@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiAuthed, API_ORIGIN } from "../../../lib/api";
+import { useAuth } from "../../../lib/auth-context";
+import { useCart } from "../../../lib/cart-context";
 
 interface Product {
   id: string;
@@ -12,6 +14,8 @@ interface Product {
   stockQty: number;
   category: string | null;
   imageUrl: string | null;
+  supplierId: string;
+  supplier?: { name: string } | null;
   attrs?: { stockText?: string } | null;
 }
 
@@ -29,7 +33,12 @@ interface Category {
 
 const LIMIT = 20;
 
+const BUYER_ROLES = ["MECHANIC", "WORKSHOP_ADMIN"];
+
 export default function CatalogPage() {
+  const { user } = useAuth();
+  const { add } = useCart();
+  const canBuy = !!user && BUYER_ROLES.includes(user.role);
   const [categories, setCategories] = useState<Category[]>([]);
   const [activeCat, setActiveCat] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -165,19 +174,20 @@ export default function CatalogPage() {
                   <th className="px-3 py-2 font-medium">Наименование</th>
                   <th className="px-3 py-2 text-right font-medium">Цена</th>
                   <th className="px-3 py-2 text-right font-medium">Остаток</th>
+                  {canBuy && <th className="px-3 py-2"></th>}
                 </tr>
               </thead>
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={canBuy ? 6 : 5} className="px-4 py-8 text-center text-slate-400">
                       Загрузка…
                     </td>
                   </tr>
                 )}
                 {!loading && result?.data.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={canBuy ? 6 : 5} className="px-4 py-8 text-center text-slate-400">
                       Ничего не найдено
                     </td>
                   </tr>
@@ -208,6 +218,16 @@ export default function CatalogPage() {
                       <td className="px-3 py-2 text-right text-slate-500">
                         {p.attrs?.stockText ?? p.stockQty}
                       </td>
+                      {canBuy && (
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            onClick={() => add(p)}
+                            className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium transition hover:bg-slate-900 hover:text-white"
+                          >
+                            + В корзину
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
               </tbody>
