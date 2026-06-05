@@ -89,6 +89,42 @@ async function main() {
     });
     console.log(`Import template updated: ${existingTemplate.name}`);
   }
+
+  // 5. Тестовая мастерская
+  let workshop = await prisma.tenant.findFirst({
+    where: { type: TenantType.WORKSHOP, name: "Веломастерская №1" },
+  });
+  if (!workshop) {
+    workshop = await prisma.tenant.create({
+      data: { type: TenantType.WORKSHOP, name: "Веломастерская №1" },
+    });
+  }
+  console.log(`Workshop: ${workshop.name} (id=${workshop.id})`);
+
+  // 6. Админ мастерской + мастер
+  await prisma.user.upsert({
+    where: { email: "workshop@7bs.local" },
+    update: {},
+    create: {
+      email: "workshop@7bs.local",
+      name: "Workshop Admin",
+      passwordHash: await bcrypt.hash("workshop123", 10),
+      role: UserRole.WORKSHOP_ADMIN,
+      tenantId: workshop.id,
+    },
+  });
+  await prisma.user.upsert({
+    where: { email: "mechanic@7bs.local" },
+    update: {},
+    create: {
+      email: "mechanic@7bs.local",
+      name: "Механик",
+      passwordHash: await bcrypt.hash("mechanic123", 10),
+      role: UserRole.MECHANIC,
+      tenantId: workshop.id,
+    },
+  });
+  console.log("Workshop admin: workshop@7bs.local / Mechanic: mechanic@7bs.local");
 }
 
 main()

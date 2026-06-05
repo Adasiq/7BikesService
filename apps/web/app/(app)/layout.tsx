@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "../../lib/auth-context";
+import { useCart } from "../../lib/cart-context";
 
 const roleLabels: Record<string, string> = {
   SUPER_ADMIN: "Супер-админ",
@@ -14,7 +15,14 @@ const roleLabels: Record<string, string> = {
 };
 
 const SUPPLIER_ROLES = ["SUPPLIER_ADMIN", "SUPPLIER_STAFF"];
+const WORKSHOP_ROLES = ["MECHANIC", "WORKSHOP_ADMIN"];
 const CATALOG_ROLES = [
+  "MECHANIC",
+  "WORKSHOP_ADMIN",
+  "SUPPLIER_ADMIN",
+  "SUPPLIER_STAFF",
+];
+const ORDER_ROLES = [
   "MECHANIC",
   "WORKSHOP_ADMIN",
   "SUPPLIER_ADMIN",
@@ -27,6 +35,7 @@ export default function AppLayout({
   children: React.ReactNode;
 }) {
   const { user, loading, logout } = useAuth();
+  const { count } = useCart();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -42,11 +51,15 @@ export default function AppLayout({
     );
   }
 
-  const nav: { href: string; label: string }[] = [
+  const nav: { href: string; label: string; badge?: number }[] = [
     { href: "/dashboard", label: "Панель" },
   ];
   if (CATALOG_ROLES.includes(user.role))
     nav.push({ href: "/catalog", label: "Каталог" });
+  if (WORKSHOP_ROLES.includes(user.role))
+    nav.push({ href: "/cart", label: "Корзина", badge: count });
+  if (ORDER_ROLES.includes(user.role))
+    nav.push({ href: "/orders", label: "Заказы" });
   if (SUPPLIER_ROLES.includes(user.role))
     nav.push({ href: "/import", label: "Импорт прайса" });
 
@@ -63,13 +76,18 @@ export default function AppLayout({
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`rounded-md px-3 py-1.5 transition ${
+                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 transition ${
                       active
                         ? "bg-slate-900 text-white"
                         : "text-slate-600 hover:bg-slate-100"
                     }`}
                   >
                     {item.label}
+                    {item.badge ? (
+                      <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs text-white">
+                        {item.badge}
+                      </span>
+                    ) : null}
                   </Link>
                 );
               })}
