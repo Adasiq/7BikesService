@@ -1,51 +1,38 @@
-# Развёртывание 7BS на хостинге Beget
+# Развёртывание 7BS на хостинге Beget (1 сайт)
 
-Пошаговая инструкция «с нуля»: как залить проект с GitHub на виртуальный хостинг
-Beget и как потом обновлять его по мере доработок.
+Пошаговая инструкция «с нуля»: как залить проект с GitHub на бесплатный тариф
+Beget (где доступен **только один сайт**) и как обновлять его по мере доработок.
 
-> **Что мы разворачиваем.** Два Node-приложения + внешняя БД:
-> - **API** (NestJS) — на поддомене `api.ВАШ-ДОМЕН`
-> - **Сайт** (Next.js) — на основном домене `ВАШ-ДОМЕН`
-> - **База данных** — уже на **Neon** (облачный Postgres), её разворачивать не нужно
-> - Картинки товаров хранятся на диске сервера (`apps/api/uploads`) и переживают обновления
+> **Как это устроено.** API (NestJS) и сайт (Next.js) запускаются **в одном
+> Node-процессе на одном домене** через Passenger:
+> - `/api/v1/*` и `/uploads/*` → обрабатывает NestJS (API и картинки товаров)
+> - все остальные адреса → отдаёт Next.js (страницы сайта)
 >
-> На Beget Node-приложения запускаются через **Passenger**: каждое приложение —
-> отдельный «сайт» с файлом `.htaccess`, который указывает на точку входа.
+> База данных — на **Neon** (облачный Postgres), её разворачивать не нужно.
+> Картинки товаров лежат на диске сервера (`apps/api/uploads`) и переживают
+> обновления. Точка входа для Passenger — файл `server.cjs` в корне проекта.
 
 ---
 
 ## Обозначения
 
-В командах ниже заменяй плейсхолдеры на свои значения:
-- `USERNAME` — твой логин на Beget (например `mylogin`)
-- `HOME` — домашняя папка, узнаешь командой `echo $HOME` (вид `/home/m/mylogin`)
-- `ВАШ-ДОМЕН` — домен сайта (на бесплатном тарифе это технический `USERNAME.beget.tech`)
+В командах заменяй плейсхолдеры:
+- `USERNAME` — твой логин Beget (по скриншоту это `u4447042`)
+- домашняя папка — узнаёшь командой `echo $HOME` (вид `/home/u/u4447042`)
+- домен — на бесплатном тарифе технический `USERNAME.beget.tech`
+  (например `u4447042.beget.tech`)
 
 ---
 
-## Шаг 1. Поддомен для API
+## Шаг 1. Подключение по SSH
 
-В панели Beget:
-1. **Домены** → у своего домена создай поддомен **`api`** (получится `api.ВАШ-ДОМЕН`).
-2. **Сайты** → убедись, что есть два сайта:
-   - сайт на `ВАШ-ДОМЕН` (это будет фронт),
-   - сайт на `api.ВАШ-ДОМЕН` (это будет API).
-3. Для обоих сайтов в панели **включи SSL** (Let's Encrypt) — чтобы работал `https://`.
-
-Запомни пути к их папкам `public_html` (обычно `~/ВАШ-ДОМЕН/public_html` и
-`~/api.ВАШ-ДОМЕН/public_html`).
-
----
-
-## Шаг 2. Подключение по SSH
-
-Данные SSH — в панели Beget (раздел «SSH»). Подключайся из PowerShell:
+Данные для SSH — в панели Beget (раздел «SSH» или «Доступ»). Из PowerShell:
 
 ```powershell
 ssh USERNAME@USERNAME.beget.tech
 ```
 
-Введи пароль. Ты в домашней папке. Проверь путь:
+Введи пароль. Проверь домашнюю папку:
 
 ```bash
 echo $HOME
@@ -53,42 +40,37 @@ echo $HOME
 
 ---
 
-## Шаг 3. Установка Node.js и pnpm
+## Шаг 2. Установка Node.js и pnpm
 
-Beget не даёт нужную версию Node глобально — ставим свою в `~/.local`.
+На хостинге нет нужной версии Node — ставим свою в `~/.local`.
 
 ```bash
 mkdir -p ~/.local && cd ~/.local
-# Node.js 22 LTS (Linux x64). Если будет ошибка совместимости — попробуй 20 LTS.
+# Node.js 22 LTS (Linux x64). Если будет ошибка совместимости (GLIBC) — возьми 20 LTS.
 wget https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz
 tar xf node-v22.14.0-linux-x64.tar.xz --strip 1
 rm node-v22.14.0-linux-x64.tar.xz
 ```
 
-Добавь Node в PATH (чтобы команды `node`/`npm` работали всегда):
+Добавь Node в PATH (чтобы команды работали всегда):
 
 ```bash
 echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
 source ~/.bashrc
-node -v    # должно показать v22.x
+node -v        # должно показать v22.x
 ```
 
-Установи pnpm:
+Установи pnpm и запомни путь к node:
 
 ```bash
 npm install -g pnpm
 pnpm -v
-```
-
-Запомни абсолютный путь к node — он понадобится в `.htaccess`:
-
-```bash
-which node     # например /home/m/mylogin/.local/bin/node
+which node     # например /home/u/u4447042/.local/bin/node  — пригодится в .htaccess
 ```
 
 ---
 
-## Шаг 4. Клонирование проекта с GitHub
+## Шаг 3. Клонирование проекта с GitHub
 
 ```bash
 cd ~
@@ -96,14 +78,14 @@ git clone https://github.com/Adasiq/7BikesService.git 7bs
 cd 7bs
 ```
 
-> Репозиторий приватный? Тогда сгенерируй на сервере SSH-ключ
+> Если репозиторий приватный — сгенерируй ключ на сервере
 > (`ssh-keygen -t ed25519`), добавь `~/.ssh/id_ed25519.pub` в GitHub →
 > Settings → Deploy keys, и клонируй по SSH:
 > `git clone git@github.com:Adasiq/7BikesService.git 7bs`.
 
 ---
 
-## Шаг 5. Переменные окружения
+## Шаг 4. Переменные окружения
 
 ### API — файл `apps/api/.env`
 
@@ -111,12 +93,10 @@ cd 7bs
 nano apps/api/.env
 ```
 
-Вставь (подставь свои значения; `DATABASE_URL` — из панели Neon):
-
 ```
 DATABASE_URL="postgresql://...neon.tech/neondb?sslmode=require"
-JWT_ACCESS_SECRET="придумай-длинную-случайную-строку-1"
-JWT_REFRESH_SECRET="придумай-длинную-случайную-строку-2"
+JWT_ACCESS_SECRET="длинная-случайная-строка-1"
+JWT_REFRESH_SECRET="длинная-случайная-строка-2"
 SUPERADMIN_EMAIL="admin@7bs.local"
 SUPERADMIN_PASSWORD="смени-на-надёжный"
 ```
@@ -125,24 +105,21 @@ SUPERADMIN_PASSWORD="смени-на-надёжный"
 
 ### Сайт — файл `apps/web/.env.local`
 
-Важно: адрес API «вшивается» в сайт **на этапе сборки**, поэтому файл нужен
-**до** сборки.
+Адрес API относительный (тот же домен!) — поэтому он одинаковый для любого домена:
 
 ```bash
 nano apps/web/.env.local
 ```
 
 ```
-NEXT_PUBLIC_API_URL="https://api.ВАШ-ДОМЕН/api/v1"
+NEXT_PUBLIC_API_URL="/api/v1"
 ```
-
-Сохрани и закрой.
 
 > Оба файла в `.gitignore` — в репозиторий не попадут, это нормально.
 
 ---
 
-## Шаг 6. Установка зависимостей и сборка
+## Шаг 5. Установка, миграции, сборка
 
 ```bash
 cd ~/7bs
@@ -151,24 +128,19 @@ pnpm build:shared
 ```
 
 > Если pnpm ругается на ключ `allowBuilds` в `pnpm-workspace.yaml` — это
-> безопасно, можно проигнорировать (он нужен только в среде разработки).
+> безопасно, можно проигнорировать.
 
-Применить миграции БД (создаст таблицы в Neon, если их ещё нет):
+Создать таблицы в БД и стартовые данные (супер-админ, тестовые поставщик и мастерская):
 
 ```bash
 pnpm --filter @7bs/api exec prisma migrate deploy
-```
-
-Создать стартовые данные (супер-админ, тестовые поставщик/мастерская):
-
-```bash
 pnpm --filter @7bs/api exec prisma db seed
 ```
 
 > Если ты тестировал локально на **той же** базе Neon — таблицы и данные уже
-> есть, миграция и seed просто ничего не сломают (seed идемпотентный).
+> есть; команды просто ничего не сломают (seed идемпотентный).
 
-Собрать оба приложения:
+Собрать API и сайт:
 
 ```bash
 pnpm --filter @7bs/api build
@@ -177,78 +149,59 @@ pnpm --filter @7bs/web build
 
 ---
 
-## Шаг 7. Точки входа Passenger (уже в проекте)
+## Шаг 6. Файл `.htaccess` для сайта
 
-Ничего создавать не нужно — в репозитории уже есть:
-- API: точка входа `apps/api/dist/main.js` (после сборки)
-- Сайт: точка входа `apps/web/server.cjs`
-
-Создай папки для перезапуска:
+Узнай точные пути:
 
 ```bash
-mkdir -p ~/7bs/apps/api/tmp ~/7bs/apps/web/tmp
+which node      # путь к node
+pwd             # должно быть ~/7bs ; полный путь вида /home/u/u4447042/7bs
 ```
 
----
-
-## Шаг 8. Файлы `.htaccess` для двух сайтов
-
-Подставь свой путь к node (из `which node`, шаг 3) и свой `HOME`.
-
-### API — `.htaccess` в папке сайта `api.ВАШ-ДОМЕН/public_html`
+Найди папку `public_html` своего сайта (в панели «Сайты» → у `USERNAME.beget.tech`
+это обычно `~/USERNAME.beget.tech/public_html`). Создай в ней `.htaccess`:
 
 ```bash
-nano ~/api.ВАШ-ДОМЕН/public_html/.htaccess
+nano ~/USERNAME.beget.tech/public_html/.htaccess
 ```
 
+Вставь (подставь свои пути из `which node` и `pwd`):
+
 ```
-PassengerNodejs /home/m/mylogin/.local/bin/node
+PassengerNodejs /home/u/u4447042/.local/bin/node
 PassengerAppType node
-PassengerAppRoot /home/m/mylogin/7bs/apps/api
-PassengerStartupFile dist/main.js
-```
-
-### Сайт — `.htaccess` в папке сайта `ВАШ-ДОМЕН/public_html`
-
-```bash
-nano ~/ВАШ-ДОМЕН/public_html/.htaccess
-```
-
-```
-PassengerNodejs /home/m/mylogin/.local/bin/node
-PassengerAppType node
-PassengerAppRoot /home/m/mylogin/7bs/apps/web
+PassengerAppRoot /home/u/u4447042/7bs
 PassengerStartupFile server.cjs
 ```
 
-> `PassengerAppRoot` — это папка приложения внутри проекта, а не `public_html`.
-> Passenger сам будет отдавать все запросы Node-приложению.
+> `PassengerAppRoot` — это **корень проекта** (`~/7bs`), а не `public_html`.
+> Точка входа `server.cjs` поднимает и API, и сайт.
+
+В панели Beget для сайта **включи SSL** (Let's Encrypt) — чтобы работал `https://`.
 
 ---
 
-## Шаг 9. Первый запуск
-
-Перезапусти оба приложения (Passenger перечитает конфиг):
+## Шаг 7. Первый запуск
 
 ```bash
-touch ~/7bs/apps/api/tmp/restart.txt
-touch ~/7bs/apps/web/tmp/restart.txt
+mkdir -p ~/7bs/tmp
+touch ~/7bs/tmp/restart.txt
 ```
 
-Подожди 20–40 секунд (первый старт дольше) и проверь:
+Подожди 30–60 секунд (первый старт долгий — поднимаются и Nest, и Next) и проверь:
 
-- `https://api.ВАШ-ДОМЕН/api/v1/health` → должно вернуть `{"status":"ok",...}`
-- `https://ВАШ-ДОМЕН` → откроется страница входа
+- `https://USERNAME.beget.tech/api/v1/health` → `{"status":"ok",...}`
+- `https://USERNAME.beget.tech` → откроется страница входа
 
-Войди под тестовым аккаунтом (например мастер `mechanic@7bs.local` /
-`mechanic123`) и проверь каталог, корзину, заказы.
+Войди тестовым аккаунтом (мастер `mechanic@7bs.local` / `mechanic123`) и проверь
+каталог, корзину, заказы.
 
 ---
 
-## Шаг 10. Обновление при доработках
+## Шаг 8. Обновление при доработках
 
-Дальше цикл простой. На своём ПК ты пушишь изменения в GitHub
-(как обычно: ветка → merge в `main` → push). На сервере:
+На своём ПК пушишь изменения в GitHub (ветка → merge в `main` → push).
+На сервере одна команда:
 
 ```bash
 cd ~/7bs
@@ -256,45 +209,49 @@ bash scripts/deploy.sh
 ```
 
 Скрипт сам: заберёт изменения (`git pull`), поставит зависимости, применит
-миграции, пересоберёт API и сайт, перезапустит оба приложения.
+миграции БД, пересоберёт API и сайт, перезапустит приложение
+(`touch tmp/restart.txt`).
 
-> Если в обновлении менялась схема БД — `deploy.sh` сам применит новую миграцию
-> (`prisma migrate deploy`).
+---
+
+## Тестовые аккаунты
+
+| Роль | Логин | Пароль |
+|---|---|---|
+| Супер-админ | `admin@7bs.local` | `admin12345` |
+| Поставщик (Инвелум) | `supplier@invelum.local` | `supplier123` |
+| Мастерская | `workshop@7bs.local` | `workshop123` |
+| Мастер | `mechanic@7bs.local` | `mechanic123` |
 
 ---
 
 ## Траблшутинг
 
-**Сайт/API не открывается, ошибка 500.**
-Смотри лог Passenger конкретного сайта:
-```bash
-tail -n 50 ~/api.ВАШ-ДОМЕН/public_html/../logs/*error* 2>/dev/null
-# или в панели Beget: раздел «Логи» нужного сайта
-```
+**Сайт не открывается, ошибка 500.**
+Смотри лог в панели Beget («Логи» сайта) или по SSH ищи логи Passenger. Частая
+причина — неверный путь в `.htaccess` (проверь `which node` и `pwd`).
 
-**`next build` падает с нехваткой памяти (killed).**
+**`next build` падает (killed / нехватка памяти).**
 На бесплатном тарифе мало RAM. Варианты:
-1. Собери сайт **локально** на своём ПК (`pnpm --filter @7bs/web build`), затем
-   скопируй папку `apps/web/.next` на сервер (например через `scp -r`), и не
-   запускай `next build` на сервере.
-2. Либо обратись в поддержку Beget за временным увеличением лимита.
+1. Собрать сайт **локально** на ПК (`pnpm --filter @7bs/web build`) и скопировать
+   папку `apps/web/.next` на сервер (через `scp -r apps/web/.next USERNAME@USERNAME.beget.tech:~/7bs/apps/web/`),
+   не запуская `next build` на сервере.
+2. Попросить поддержку Beget временно поднять лимит памяти.
 
-**Картинки товаров не отображаются.**
-Проверь, что `NEXT_PUBLIC_API_URL` в `apps/web/.env.local` указан с `https://` и
-что сайт пересобран после изменения этого файла. Картинки отдаёт API по адресу
-`https://api.ВАШ-ДОМЕН/uploads/...`.
+**Картинки товаров не видны.**
+Убедись, что `apps/web/.env.local` содержит `NEXT_PUBLIC_API_URL="/api/v1"` и что
+сайт пересобран после создания этого файла.
 
-**Меняешь `apps/web/.env.local` — изменения не видны.**
-Адрес API вшивается при сборке. После правки `.env.local` пересобери сайт:
-`pnpm --filter @7bs/web build` и `touch apps/web/tmp/restart.txt`.
-
-**Ошибка совместимости Node (GLIBC).**
-Поставь Node 20 LTS вместо 22 (шаг 3, заменив версию в ссылке).
+**Изменил `apps/web/.env.local`, ничего не поменялось.**
+Адрес API вшивается при сборке — пересобери сайт и перезапусти:
+`pnpm --filter @7bs/web build && touch ~/7bs/tmp/restart.txt`.
 
 **Перезапустить вручную:**
 ```bash
-touch ~/7bs/apps/api/tmp/restart.txt ~/7bs/apps/web/tmp/restart.txt
+touch ~/7bs/tmp/restart.txt
 ```
+
+**Несовместимость Node (GLIBC).** Поставь Node 20 LTS вместо 22 (шаг 2).
 
 ---
 
@@ -302,4 +259,3 @@ touch ~/7bs/apps/api/tmp/restart.txt ~/7bs/apps/web/tmp/restart.txt
 
 - Смени пароли тестовых аккаунтов и `SUPERADMIN_PASSWORD`.
 - Смени креды БД Neon (пароль присылался в переписке) и обнови `apps/api/.env`.
-- Позже стоит ограничить CORS в API только своим доменом (сейчас разрешены все).
