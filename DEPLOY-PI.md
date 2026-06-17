@@ -50,9 +50,9 @@ free -h        # проверь, что Swap ~2.0Gi
 ## Шаг 3. Node.js и pnpm
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
-node -v        # v20.x
+node -v        # v22.x  (нужен >= 22.13, иначе pnpm не запустится)
 sudo npm install -g pnpm pm2
 ```
 
@@ -217,6 +217,10 @@ bash scripts/deploy-pi.sh
 
 **`uname -m` показывает armv7l.** Система 32-битная — Prisma не заработает.
 Нужна 64-битная Raspberry Pi OS.
+
+**`pnpm install` падает: `No such built-in module: node:sqlite` / «requires at
+least Node.js v22.13».** Установлен Node 20. Поставь Node 22 (Шаг 3:
+`setup_22.x`), затем `sudo npm install -g pnpm` и повтори.
 
 **`next build` падает (killed).** Мало памяти. Проверь swap (`free -h`, должно быть
 ~2 ГБ) и собери с `NODE_OPTIONS=--max-old-space-size=768`.
