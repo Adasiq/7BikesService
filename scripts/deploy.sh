@@ -13,6 +13,9 @@ pnpm install
 echo "==> сборка общего пакета"
 pnpm build:shared
 
+echo "==> генерация Prisma Client"
+pnpm --filter @7bs/api exec prisma generate
+
 echo "==> миграции БД (Neon)"
 pnpm --filter @7bs/api exec prisma migrate deploy
 

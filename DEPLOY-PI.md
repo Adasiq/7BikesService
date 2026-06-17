@@ -113,6 +113,7 @@ NEXT_PUBLIC_API_URL="/api/v1"
 cd ~/7bs
 pnpm install
 pnpm build:shared
+pnpm --filter @7bs/api exec prisma generate
 pnpm --filter @7bs/api build
 ```
 
@@ -221,6 +222,10 @@ bash scripts/deploy-pi.sh
 **`pnpm install` падает: `No such built-in module: node:sqlite` / «requires at
 least Node.js v22.13».** Установлен Node 20. Поставь Node 22 (Шаг 3:
 `setup_22.x`), затем `sudo npm install -g pnpm` и повтори.
+
+**Сборка API падает: `@prisma/client has no exported member UserRole/Prisma/...`.**
+Не сгенерирован Prisma Client. Выполни `pnpm --filter @7bs/api exec prisma generate`
+и собери снова.
 
 **`next build` падает (killed).** Мало памяти. Проверь swap (`free -h`, должно быть
 ~2 ГБ) и собери с `NODE_OPTIONS=--max-old-space-size=768`.
